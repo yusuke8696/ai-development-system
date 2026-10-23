@@ -47,7 +47,7 @@ Markdownの構造検証が通っても、内容の正しさまでは保証しな
 
 `dist/AIWorkspace/AIWorkspace.exe` を含むフォルダーを配布する。端末固有データ・資格情報・試験用DBを配布物に含めない。
 
-空のリポジトリでPRを作る比較元として、READMEだけの初期commitをmainへ作成する操作は、自動承認レビューに拒否された。既定ブランチへの直接変更には明示的なユーザー承認が必要と判断されたためであり、ネットワーク障害ではない。回避する別経路でのmain作成は行っていない。コードと配布物はローカルで保持し、GitHubへのpush・PR作成は保留している。
+ユーザーの明示承認を受け、READMEだけの初期commitをmainへ登録し、実装は `feature/local-ai-workspace` へpushした。[PR #1](https://github.com/yusuke8696/ai-development-system/pull/1) を作成済み。リーダーによるレビュー・承認とマージは未実施。
 
 ## 設計との対応
 
