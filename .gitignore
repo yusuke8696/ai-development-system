@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+*.spec
+*.db*
+*.log
+.runtime/
+test-results/private/
+node_modules/
+.tests-user-*/
+.exe-user-*/
+artifacts/*.zip
+test-results/*.xml

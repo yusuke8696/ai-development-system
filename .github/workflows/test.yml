@@ -1,0 +1,24 @@
+name: Windows tests and executable
+on:
+  pull_request:
+  push:
+    branches: [feature/local-ai-workspace]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q --junitxml=test-results/junit.xml
+      - run: python scripts/build.py
+      - run: python scripts/exe_smoke.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AIWorkspace-windows-x64
+          path: dist/AIWorkspace/
