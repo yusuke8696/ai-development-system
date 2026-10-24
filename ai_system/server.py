@@ -75,8 +75,8 @@ def create_app(root, bootstrap=None, service=None, polling=True):
     @app.get("/api/state")
     def state():
         return {"csrf": csrf, "settings": service.settings(), "workflows": WORKFLOWS,
-                "projects": [service.project(p["id"]) for p in service.store.list("projects")],
-                **{kind: service.store.list(kind) for kind in ("models", "templates", "skills", "tools", "artifacts", "dialogue", "test_runs")}}
+                "projects": [dict(service.project(p["id"]), template_preparation=service.template_preparation(p["id"])) for p in service.store.list("projects")],
+                **{kind: service.store.list(kind) for kind in ("models", "templates", "project_templates", "skills", "tools", "artifacts", "dialogue", "test_runs")}}
 
     @app.post("/api/settings")
     def settings(body: dict):
@@ -182,6 +182,18 @@ def create_app(root, bootstrap=None, service=None, polling=True):
         return service.store.put("projects", dict(old, leader_login=body.get("leader_login", old.get("leader_login", "")),
                                                  leader_id=None), body.get("expected_version"))
 
+    @app.get("/api/projects/{pid}/preparation")
+    def preparation(pid):
+        return service.template_preparation(pid)
+
+    @app.post("/api/projects/{pid}/templates/prepare")
+    def prepare_templates(pid, body: dict):
+        return service.prepare_templates(pid, body.get("bindings"))
+
+    @app.post("/api/projects/{pid}/templates/confirm")
+    def confirm_templates(pid):
+        return service.confirm_templates(pid)
+
     @app.post("/api/projects/{pid}/answer")
     def answer(pid, body: dict):
         return service.answer(pid, body)
@@ -196,11 +208,13 @@ def create_app(root, bootstrap=None, service=None, polling=True):
 
     @app.post("/api/tasks/{tid}/cancel")
     def cancel(tid):
-        task = service.store.get("tasks", tid)
-        if task["state"] != "running":
-            raise Conflict("実行中のタスクだけ停止できます。")
-        service.cancelled.add(tid)
-        return service.store.change("tasks", tid, state="cancelling")
+        with service.lock:
+            task = service.store.get("tasks", tid)
+            service.require_local_owner(task)
+            if task["state"] != "running":
+                raise Conflict("実行中のタスクだけ停止できます。")
+            service.cancelled.add(tid)
+            return service.store.change("tasks", tid, state="cancelling")
 
     @app.post("/api/tasks/{tid}/approve")
     def approve(tid, body: dict):

@@ -1,19 +1,34 @@
-"""Opt-in integration check against the user's running llama-server."""
+"""Real llama-server document generation; GitHub approval/merge is a test fixture.
+
+This deliberately imports the isolated FormatGitHub test double. It exercises
+the production preflight checks without creating remote PRs or claiming that a
+human has approved an actual GitHub PR. It is not a full lifecycle test.
+"""
 import json
 import sys
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from ai_system.service import Service
+from ai_system.store import Conflict
+from test_project_templates import FormatGitHub, prepare_verified
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".runtime/live-llm")
-s = Service(root)
-p = s.create_project({"name": "LLM接続受入試験", "workflow": "waterfall", "intent":
+gh_fixture = FormatGitHub()
+s = Service(root, github_factory=lambda: gh_fixture)
+p = s.create_project({"name": "LLM接続受入試験", "workflow": "waterfall", "leader_login": "leader", "intent":
     "社内担当者1名が自分のPCで使うメモ管理ツール。Python標準ライブラリのCLIとする。"
     "メモの追加・一覧表示・削除が必要。UTF-8 JSONファイルに保存。外部通信、認証、公開配布は不要。"
     "削除前に確認する。受入条件は追加後の再起動で残ることと、削除を取消すと残ること。"
     "初版は上記だけを対象とし、追加情報がなくても要件定義を作成してください。"})
 t = p["tasks"][0]
+try:
+    s.start(t["id"], {})
+    raise AssertionError("Unprepared project was allowed to start")
+except Conflict:
+    pass
+preflight = prepare_verified(s, p, gh_fixture)
 started = time.monotonic()
 s.start(t["id"], {})
 s.jobs[t["id"]].join(240)
@@ -30,6 +45,9 @@ for attempt in range(2):
 t = s.store.get("tasks", t["id"])
 artifacts = s.store.list("artifacts")
 report = {"model": "qwythos-9B-v2", "elapsed_seconds": round(time.monotonic() - started, 2),
+          "scope": "real local llama-server requirement generation; simulated GitHub registration/leader approval/merge, not a full lifecycle",
+          "preflight": {"source": "FormatGitHub + prepare_verified test fixture", "ready": preflight["ready"],
+                        "pinned_commit": preflight["commit"], "review_id": preflight["review_id"], "real_github_mutations": False},
           "task_state": t["state"], "artifact_count": len(artifacts), "error": t.get("error"),
           "validation_errors": artifacts[-1]["errors"] if artifacts else [],
           "questions": [x["body"] for x in s.store.list("dialogue")]}
@@ -38,4 +56,5 @@ root.mkdir(parents=True, exist_ok=True)
 print(json.dumps(report, ensure_ascii=True))
 if artifacts:
     (root / "generated-requirements.md").write_text(artifacts[-1]["body"], "utf-8")
+s.close()
 assert t["state"] == "waiting_approval" and artifacts and not artifacts[-1]["errors"], "Live generation failed"

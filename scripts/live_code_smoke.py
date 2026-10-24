@@ -1,16 +1,31 @@
-"""Live coding check, with pre-completed planning fixtures (not a full lifecycle test)."""
+"""Real llama-server coding and generated-code tests with isolated GitHub fixtures.
+
+GitHub format registration, leader approval and merge are simulated using the
+dedicated regression-test helper. Planning is pre-completed by a local fixture.
+Production preflight is exercised; this is not a full lifecycle or real human
+approval test, and this script performs no real GitHub writes.
+"""
 import json
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from ai_system.service import Service
-from ai_system.tools import run_command
+from ai_system.store import Conflict
+from test_project_templates import FormatGitHub, prepare_verified
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".runtime/live-code")
-s = Service(root)
-p = s.store.list("projects")[-1] if s.store.list("projects") else s.create_project({"name": "コード生成受入試験", "intent":
+gh_fixture = FormatGitHub()
+s = Service(root, github_factory=lambda: gh_fixture)
+p = s.create_project({"name": "コード生成受入試験", "leader_login": "leader", "intent":
     "Python標準ライブラリだけを使う計算モジュール。calc.pyのadd(a,b)は2つの数値の和を返す。"
     "tests/test_calc.pyはunittestで正数・負数・ゼロを検証する。GUI・外部通信・追加機能不要。"})
+try:
+    s.start(s.tasks(p["id"])[0]["id"], {})
+    raise AssertionError("Unprepared project was allowed to start")
+except Conflict:
+    pass
+preflight = prepare_verified(s, p, gh_fixture)
 for t in s.tasks(p["id"]):
     if t["kind"] in {"requirements", "architecture", "design"}:
         s.store.change("tasks", t["id"], state="succeeded")
@@ -22,7 +37,9 @@ if not t["artifacts"]:
 t = s.store.get("tasks", t["id"])
 artifacts = s.store.list("artifacts")
 report = {"model": "qwythos-9B-v2", "task_state": t["state"], "error": t.get("error"),
-          "scope": "coding with pre-completed planning fixtures"}
+          "scope": "real local llama-server coding and generated unittest; simulated GitHub registration/leader approval/merge and pre-completed planning, not a full lifecycle",
+          "preflight": {"source": "FormatGitHub + prepare_verified test fixture", "ready": preflight["ready"],
+                        "pinned_commit": preflight["commit"], "review_id": preflight["review_id"], "real_github_mutations": False}}
 if artifacts:
     s.store.change("settings", "local", python=sys.executable, allow_commands=True)
     history = []
@@ -49,4 +66,5 @@ if artifacts:
 root.mkdir(parents=True, exist_ok=True)
 (root / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), "utf-8")
 print(json.dumps(report, ensure_ascii=True))
+s.close()
 assert t["state"] == "waiting_approval" and report.get("test", {}).get("exit_code") == 0

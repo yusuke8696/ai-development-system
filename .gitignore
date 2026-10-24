@@ -10,6 +10,8 @@ dist/
 test-results/private/
 node_modules/
 .tests-user-*/
+.tests-collab-*/
+.tests-collab-review-*/
 .exe-user-*/
 artifacts/*.zip
 test-results/*.xml

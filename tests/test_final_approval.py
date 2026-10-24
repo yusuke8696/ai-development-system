@@ -36,11 +36,28 @@ def setup_final(tmp_path):
 
 def test_final_approval_completes_and_dismissal_reopens(tmp_path):
     s, remote, p, final = setup_final(tmp_path)
+    original = s.store.get("tasks", final["id"])
+    snapshot = s.snapshot(p["id"])
     assert s.refresh_approval(final["id"])["state"] == "succeeded"
     assert s.project(p["id"])["state"] == "completed"
+    assert s.store.get("tasks", final["id"]) == original
+    assert s.snapshot(p["id"]) == snapshot
     remote.state = "DISMISSED"
     assert s.refresh_approval(final["id"])["state"] == "waiting_approval"
     assert s.project(p["id"])["state"] == "active"
+    assert s.store.get("tasks", final["id"]) == original
+    assert s.snapshot(p["id"]) == snapshot
+
+
+def test_replica_restart_does_not_retain_observed_completion_as_shared_state(tmp_path):
+    s, remote, p, final = setup_final(tmp_path)
+    assert s.refresh_approval(final["id"])["state"] == "succeeded"
+    restarted = Service(tmp_path, github_factory=lambda: remote)
+    assert restarted.store.get("tasks", final["id"])["state"] == "waiting_approval"
+    assert restarted.snapshot(p["id"])["records"]["tasks:" + final["id"]]["state"] == "waiting_approval"
+    remote.state = "DISMISSED"
+    restarted.refresh_approval(final["id"])
+    assert restarted.project(p["id"])["state"] == "active"
 
 
 def test_external_final_push_invalidates(tmp_path):
@@ -53,7 +70,9 @@ def test_external_final_push_invalidates(tmp_path):
 
 def test_new_task_invalidates_manifest(tmp_path):
     s, _, p, final = setup_final(tmp_path)
+    assert s.refresh_approval(final["id"])["state"] == "succeeded"
     s.add_task(p["id"], {"title": "追加", "role": "coding", "depends_on": []})
+    assert s.project(p["id"])["state"] == "active"
     assert s.refresh_approval(final["id"])["state"] == "waiting_approval"
 
 
