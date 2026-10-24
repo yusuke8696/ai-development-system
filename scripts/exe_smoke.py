@@ -32,7 +32,13 @@ try:
         response = client.post(base + "/api/projects", json={"name": "exe起動試験", "intent": "永続化の確認"})
         assert response.status_code == 200
         project_id = response.json()["id"]
+        state = client.get(base + "/api/state").json()
+        project = next(p for p in state["projects"] if p["id"] == project_id)
+        assert not project["template_preparation"]["ready"]
+        assert client.post(base + "/api/tasks/" + project["tasks"][0]["id"] + "/start", json={}).status_code == 409
+        assert "開発準備・書式登録" in page.text
         report.update(startup="passed", project_creation="passed", tasks=len(response.json()["tasks"]), bundled_ponytail="passed")
+        report["unapproved_template_gate"] = "passed"
         client.post(base + "/api/shutdown", json={})
     process.wait(timeout=10)
     report["shutdown"] = "passed"

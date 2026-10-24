@@ -21,13 +21,13 @@ def plan(project_id, workflow, scope=1, prior=None):
     result = []
     dep = prior
     for kind, title, role in WORKFLOWS[workflow]["steps"]:
-        task = {"id": str(uuid.uuid4()), "project_id": project_id, "scope": scope,
+        task = {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-dev:{project_id}:{workflow}:{scope}:{kind}")), "project_id": project_id, "scope": scope,
                 "kind": kind, "title": title, "role": role, "state": "ready" if not dep else "planned",
                 "depends_on": [dep] if dep else [], "artifacts": [], "pr": None, "issue": None,
                 "template_id": kind.replace("_", "-"), "owner": None, "run_id": None}
         result.append(task)
         dep = task["id"]
-    result.append({"id": str(uuid.uuid4()), "project_id": project_id, "scope": scope,
+    result.append({"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-dev:{project_id}:{workflow}:{scope}:leader_review")), "project_id": project_id, "scope": scope,
                    "kind": "leader_review", "title": "リーダーによるGitHubレビュー・承認",
                    "role": "leader", "state": "planned", "depends_on": [dep],
                    "artifacts": [], "pr": None, "issue": None, "owner": None, "run_id": None})

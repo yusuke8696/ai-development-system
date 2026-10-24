@@ -1,5 +1,6 @@
 import copy
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 from ai_system.service import Service
 from ai_system.store import Conflict
@@ -11,9 +12,12 @@ class Remote:
         self.refs = {}
         self.lock = threading.RLock()
         self.counter = 0
+        self.snapshot_barrier = None
+        self.pull_requests = {}
+        self.reviews = {}
+
     def client(self, user_id=1):
         return Client(self, user_id)
-
 
 class Client:
     def __init__(self, remote, user_id):
@@ -26,18 +30,59 @@ class Client:
     def user_by_login(self, login):
         return {"id": 2, "type": "User", "login": login}
     def snapshot(self, project):
-        if project["id"] not in self.r.snapshots:
-            raise KeyError(project["id"])
-        return copy.deepcopy(self.r.snapshots[project["id"]])
+        with self.r.lock:
+            if project["id"] not in self.r.snapshots:
+                raise KeyError(project["id"])
+            result = copy.deepcopy(self.r.snapshots[project["id"]])
+            barrier = self.r.snapshot_barrier
+        if barrier:
+            barrier.wait(timeout=10)
+            with self.r.lock:
+                if self.r.snapshot_barrier is barrier:
+                    self.r.snapshot_barrier = None
+        return result
+
     def publish_snapshot(self, project, snapshot, expected_sha=None):
+        """Model per-record CAS, including idempotent retries and partial publication.
+
+        A stale version for an untouched record must not prevent another record
+        from being published. A changed record must still match its baseline.
+        """
         with self.r.lock:
             old = self.r.snapshots.get(project["id"])
-            if old and old[1] != expected_sha:
-                raise Conflict("stale SHA")
-            self.r.counter += 1
-            sha = str(self.r.counter)
-            self.r.snapshots[project["id"]] = (copy.deepcopy(snapshot), sha)
-            return sha
+            current = copy.deepcopy(old[0]["records"] if old else {})
+            versions = copy.deepcopy({key: value for key, value in old[1].items() if key != "legacy"}
+                                     if old and isinstance(old[1], dict) else {})
+            if expected_sha is None:
+                baseline = {}
+            elif isinstance(expected_sha, dict):
+                baseline = {key: value["record"] for key, value in expected_sha.items() if key != "legacy"}
+            elif old and old[1] == expected_sha:
+                baseline = copy.deepcopy(current)  # Legacy single-snapshot token.
+            else:
+                raise Conflict("stale snapshot token")
+            desired = snapshot["records"]
+            changed = {key for key in set(baseline) | set(desired) if desired.get(key) != baseline.get(key)}
+            for key in changed:
+                if current.get(key) not in (baseline.get(key), desired.get(key)):
+                    raise Conflict("stale record: " + key)
+            for key in changed:
+                if key not in desired:
+                    current.pop(key, None)
+                    versions.pop(key, None)
+                    continue
+                if current.get(key) != desired[key] or key not in versions:
+                    self.r.counter += 1
+                    current[key] = copy.deepcopy(desired[key])
+                    versions[key] = {"sha": str(self.r.counter), "record": copy.deepcopy(desired[key])}
+            # Migration of untouched records from the legacy snapshot.
+            for key, record in current.items():
+                if key not in versions:
+                    self.r.counter += 1
+                    versions[key] = {"sha": str(self.r.counter), "record": copy.deepcopy(record)}
+            token = versions
+            self.r.snapshots[project["id"]] = ({"schema_version": 2, "records": current}, token)
+            return copy.deepcopy(token)
     def claim(self, project, task, owner):
         with self.r.lock:
             if task["id"] in self.r.refs:
@@ -47,6 +92,12 @@ class Client:
     def check_owner(self, project, task):
         if self.r.refs[task["id"]] != task["owner"]:
             raise Conflict("ownership changed")
+
+    def pr_reviews(self, repo, number):
+        return copy.deepcopy(self.r.pull_requests[number]), copy.deepcopy(self.r.reviews.get(number, []))
+
+    def checks_pass(self, repo, sha):
+        return True
 
 
 def make_pair(tmp_path):
@@ -71,6 +122,24 @@ def test_two_devices_merge_different_tasks(tmp_path):
     assert b.store.get("tasks", t1["id"])["note"] == "from a"
 
 
+def test_two_devices_publish_different_tasks_concurrently(tmp_path):
+    remote, a, b, p = make_pair(tmp_path)
+    first, second = p["tasks"][:2]
+    a.store.change("tasks", first["id"], note="from a")
+    b.store.change("tasks", second["id"], note="from b")
+    # Both writers must read the same remote version before either publishes.
+    remote.snapshot_barrier = threading.Barrier(2)
+    with ThreadPoolExecutor(2) as workers:
+        results = list(workers.map(lambda service: service.sync(p["id"]), [a, b]))
+    assert len(results) == 2
+    remote.snapshot_barrier = None
+    a.sync(p["id"])
+    b.sync(p["id"])
+    for service in (a, b):
+        assert service.store.get("tasks", first["id"])["note"] == "from a"
+        assert service.store.get("tasks", second["id"])["note"] == "from b"
+
+
 def test_conflict_preserves_local(tmp_path):
     _, a, b, p = make_pair(tmp_path)
     tid = p["tasks"][0]["id"]
@@ -91,6 +160,30 @@ def test_only_one_device_can_claim(tmp_path):
         b.claim(tid)
     # Other tasks can run independently.
     assert b.claim(p["tasks"][1]["id"])["owner"]["user_id"] == 2
+
+
+def test_simultaneous_claim_has_exactly_one_winner(tmp_path):
+    remote, a, b, p = make_pair(tmp_path)
+    tid = p["tasks"][0]["id"]
+    ready = threading.Barrier(2)
+
+    def claim(service):
+        ready.wait(timeout=10)
+        try:
+            return service.claim(tid)["owner"]
+        except Conflict:
+            return None
+
+    with ThreadPoolExecutor(2) as workers:
+        results = list(workers.map(claim, [a, b]))
+    winners = [owner for owner in results if owner]
+    assert len(winners) == 1
+    assert remote.refs[tid] == winners[0]
+    winner = a if winners[0]["user_id"] == 1 else b
+    loser = b if winner is a else a
+    winner.sync(p["id"])
+    loser.sync(p["id"])
+    assert loser.store.get("tasks", tid)["owner"] == winners[0]
 
 
 def test_old_owner_cannot_publish_after_handover(tmp_path):

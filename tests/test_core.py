@@ -166,6 +166,9 @@ class FakeLLM:
 
 
 def new_project(service, workflow="waterfall"):
+    # These tests isolate agent execution; test_project_templates covers the real gate.
+    service.ensure_prepared = lambda pid: {}
+    service.project_template = lambda pid, source: service.store.get("templates", source)
     return service.create_project({"name": "テスト", "intent": "テストのための業務ツール", "workflow": workflow})
 
 
@@ -206,7 +209,8 @@ def test_leader_cannot_be_ui_approved(tmp_path):
 def test_restart_running_task_blocks(tmp_path):
     s = Service(tmp_path)
     p = new_project(s)
-    s.store.change("tasks", p["tasks"][0]["id"], state="running")
+    r = s.store.put("runs", {"device_id": s.settings()["device_id"], "state": "running"})
+    s.store.change("tasks", p["tasks"][0]["id"], state="running", run_id=r["id"])
     assert Service(tmp_path).tasks(p["id"])[0]["state"] == "blocked"
 
 
