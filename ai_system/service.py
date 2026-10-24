@@ -120,6 +120,11 @@ class Service(ProjectTemplatesMixin):
     def github(self):
         return self.github_factory() if self.github_factory else GitHub(self.secrets.get("github"))
 
+    def github_diagnostics(self):
+        from .diagnostics import diagnose_github
+        return diagnose_github(self.store.get("settings", "local")["repo"], self.github,
+                               lambda: self.secrets.configured("github"))
+
     def llm(self, role):
         profiles = self.store.list("models")
         chosen = next((p for p in profiles if role in p.get("roles", [])), None)

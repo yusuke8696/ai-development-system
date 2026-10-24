@@ -29,6 +29,11 @@ try:
         client.headers["x-csrf-token"] = state["csrf"]
         assert len(state["workflows"]) == 3
         assert any(s["id"] == "ponytail" for s in state["skills"])
+        diagnosis = client.post(base + "/api/github/test", json={})
+        assert diagnosis.status_code == 200
+        assert diagnosis.json()["failed_stage"] == "credentials"
+        assert diagnosis.json()["steps"][1]["code"] == "token_missing"
+        report["github_diagnostics"] = "passed"
         response = client.post(base + "/api/projects", json={"name": "exe起動試験", "intent": "永続化の確認"})
         assert response.status_code == 200
         project_id = response.json()["id"]

@@ -129,12 +129,7 @@ def create_app(root, bootstrap=None, service=None, polling=True):
 
     @app.post("/api/github/test")
     def github_test():
-        gh = service.github()
-        try:
-            user = gh.user()
-            return {"login": user["login"], "id": user["id"], "repo": gh.meta(service.settings()["repo"])["full_name"]}
-        finally:
-            gh.close()
+        return service.github_diagnostics()
 
     @app.post("/api/projects")
     def project_create(body: dict):
