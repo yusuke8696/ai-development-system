@@ -17,6 +17,8 @@ class FormatGitHub:
         self.number = 0
         self.merged = False
         self.approved = True
+        self.author_id = 7
+        self.with_reviews = True
         self.reads = []
         self.offline = False
         self.repo = "example/repo"
@@ -44,14 +46,17 @@ class FormatGitHub:
         if self.offline:
             raise ValueError("offline")
         assert repo == self.repo and number == self.number
-        pr = {"user": {"id": 7, "type": "User"}, "merged": self.merged,
+        pr = {"user": {"id": self.author_id, "type": "User"}, "merged": self.merged,
               "state": "closed" if self.merged else "open", "merge_commit_sha": self.commit,
+              "merged_by": {"id": self.author_id, "type": "User"},
+              "merged_at": "2026-10-24T01:00:00Z" if self.merged else None,
+              "html_url": f"https://github.com/{repo}/pull/{number}",
               "head": {"sha": self.remote_head or self.head, "repo": {"full_name": repo}},
               "base": {"ref": self.base_branch, "repo": {"full_name": self.base_repo or repo}}}
         reviews = [{"id": 900, "user": {"id": 42, "login": "leader", "type": "User"},
                     "state": "APPROVED" if self.approved else "CHANGES_REQUESTED",
                     "submitted_at": "2026-10-24T00:00:00Z", "commit_id": self.review_head or self.head}]
-        return pr, reviews
+        return pr, reviews if self.with_reviews else []
 
     def content(self, repo, path, ref):
         assert repo == self.repo and ref == self.commit  # Never mutable main or a personal draft.
@@ -95,7 +100,8 @@ def test_registration_contains_only_selected_project_formats(workspace):
     result = service.prepare_templates(project["id"], default_bindings(service, project))
     assert not result["ready"] and result["pr"]["number"] == 1
     assert len(result["required"]) == 5
-    assert all(path.startswith((".ai-dev/templates/" + project["id"], ".ai-dev/template-locks/")) for path in gh.files)
+    assert all(path.startswith((".ai-dev/templates/" + project["id"], ".ai-dev/template-locks/",
+                               ".ai-dev/oss/" + project["id"], ".github/workflows/aiworkspace-oss-" + project["id"])) for path in gh.files)
     assert not any("backlog" in path or "owner.json" in path for path in gh.files)
     assert service.store.list("templates") == before
     assert not service.store.list("project_templates")
@@ -111,17 +117,13 @@ def test_registration_rejects_missing_or_wrong_type_bindings(workspace):
         service.prepare_templates(project["id"], bindings)
 
 
-@pytest.mark.parametrize("change", ["unmerged", "not_approved", "stale_review", "changed_head", "wrong_repo", "wrong_base"])
-def test_registration_requires_real_matching_leader_review_and_merge(workspace, change):
+@pytest.mark.parametrize("change", ["unmerged", "changed_head", "wrong_repo", "wrong_base"])
+def test_registration_requires_matching_github_merge(workspace, change):
     service, project, gh = workspace
     service.prepare_templates(project["id"], default_bindings(service, project))
     gh.merged = True
     if change == "unmerged":
         gh.merged = False
-    elif change == "not_approved":
-        gh.approved = False
-    elif change == "stale_review":
-        gh.review_head = "f" * 40
     elif change == "changed_head":
         gh.remote_head = gh.review_head = "f" * 40
     elif change == "wrong_repo":
@@ -132,6 +134,35 @@ def test_registration_requires_real_matching_leader_review_and_merge(workspace, 
         service.confirm_templates(project["id"])
     assert not service.template_preparation(project["id"])["ready"]
     assert not service.store.list("template_verifications")
+
+
+@pytest.mark.parametrize("author_id", [7, 42])
+@pytest.mark.parametrize("reviews", ["none", "changes_requested", "stale"])
+def test_github_merge_confirms_formats_including_solo_leader(workspace, author_id, reviews):
+    service, project, gh = workspace
+    gh.author_id = author_id
+    service.prepare_templates(project["id"], default_bindings(service, project))
+    gh.merged = True
+    gh.with_reviews = reviews != "none"
+    gh.approved = reviews != "changes_requested"
+    gh.review_head = "f" * 40 if reviews == "stale" else None
+    result = service.confirm_templates(project["id"])
+    assert result["ready"] and result["commit"] == gh.commit
+    assert result["approval_kind"] == "merge" and result["review_id"] is None
+    proof = service.store.list("template_verifications")[0]["approval_evidence"]
+    assert proof["kind"] == "merge" and proof["merger_id"] == author_id
+    assert proof["merge_commit_sha"] == gh.commit and proof["sha"] == gh.head
+    assert service.project_template(project["id"], "requirements")["pinned_commit"] == gh.commit
+
+
+def test_solo_leader_waits_for_merge_without_requesting_another_leader(workspace):
+    service, project, gh = workspace
+    gh.author_id = 42
+    gh.with_reviews = False
+    service.prepare_templates(project["id"], default_bindings(service, project))
+    with pytest.raises(Conflict, match="GitHubで内容を確認してマージ"):
+        service.confirm_templates(project["id"])
+    assert not service.template_preparation(project["id"])["ready"]
 
 
 def test_confirm_pins_merge_commit_and_personal_edits_cannot_change_it(workspace):
@@ -204,7 +235,7 @@ def test_joined_pc_verifies_remote_ready_and_keeps_personal_defaults(workspace, 
         other.close()
 
 
-def test_untrusted_shared_ready_flag_cannot_bypass_leader_review(workspace, tmp_path):
+def test_untrusted_shared_ready_flag_cannot_bypass_github_merge(workspace, tmp_path):
     service, project, gh = workspace
     prepare_verified(service, project, gh)
     other = Service(tmp_path / "untrusted", github_factory=lambda: gh)
@@ -212,7 +243,7 @@ def test_untrusted_shared_ready_flag_cannot_bypass_leader_review(workspace, tmp_
         other.store.put("projects", service.store.get("projects", project["id"]))
         for task in service.tasks(project["id"]):
             other.store.put("tasks", task)
-        gh.approved = False
+        gh.merged = False
         with pytest.raises(Conflict):
             other.ensure_prepared(project["id"])
         assert not other.template_preparation(project["id"])["ready"]
@@ -275,8 +306,11 @@ def test_same_template_id_is_isolated_between_projects_and_repositories(workspac
     assert {item["repo"] for item in cached} == {"example/repo", "other/repo"}
 
 
-def test_preparation_api_and_state_keep_formats_separate(workspace):
+@pytest.mark.parametrize("solo", [False, True])
+def test_preparation_api_and_state_keep_formats_separate(workspace, solo):
     service, project, gh = workspace
+    if solo:
+        gh.author_id, gh.with_reviews = 42, False
     app = create_app(service.store.root, bootstrap="test", service=service, polling=False)
     with TestClient(app, raise_server_exceptions=False) as client:
         client.get("/launch/test")

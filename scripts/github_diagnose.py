@@ -22,7 +22,7 @@ def main():
             row = db.execute("SELECT body FROM records WHERE kind='settings' AND id='local'").fetchone()
             repo = json.loads(row[0])["repo"]
         secrets = Secrets(root)
-        report = diagnose_github(repo, lambda: GitHub(secrets.get("github")), lambda: secrets.configured("github"))
+        report = diagnose_github(repo, lambda token: GitHub(token), lambda: secrets.configured("github"), lambda: secrets.get("github"))
     except Exception:
         report = {"ok": False, "failed_stage": "configuration", "message": "保存済み設定を読み取れませんでした。",
                   "steps": [{"id": "configuration", "name": "保存済み設定", "state": "failed", "code": "settings_unreadable",

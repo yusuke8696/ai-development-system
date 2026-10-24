@@ -81,9 +81,10 @@ def _get(gh, path, stage):
     return data, details
 
 
-def diagnose_github(repo, github_factory, token_configured):
+def diagnose_github(repo, github_factory, token_configured, token_loader=None):
     stages = [("configuration", "保存済みリポジトリ設定"), ("credentials", "保存済みトークンの読み込み"),
-              ("authentication", "GitHub認証"), ("repository", "リポジトリの参照"), ("branch", "既定ブランチの参照")]
+              ("client", "通信クライアントの初期化"), ("authentication", "GitHub認証"),
+              ("repository", "リポジトリの参照"), ("branch", "既定ブランチの参照")]
     report = {"ok": False, "checked_at": now(), "repository": "", "steps": [
         {"id": key, "name": name, "state": "not_run"} for key, name in stages],
         "note": "保存済み設定を使用した読み取り専用の診断です。PR作成等の書き込み権限や保護ルールは、このテストでは検証しません。"}
@@ -102,26 +103,39 @@ def diagnose_github(repo, github_factory, token_configured):
             raise DiagnosticFailure("credentials_unreadable", "保存済み資格情報を読み取れませんでした。", "同じWindowsユーザーで起動し、トークンを再入力して設定を保存してください。") from None
         if not configured:
             raise DiagnosticFailure("token_missing", "GitHubアクセストークンが未登録です。", "トークンを入力し「設定を保存」を押してから接続テストを実行してください。")
+        token = None
+        if token_loader is not None:
+            try:
+                token = token_loader()
+            except Exception as exc:
+                details = {}
+                if isinstance(getattr(exc, "winerror", None), int):
+                    details["windows_error"] = exc.winerror
+                raise DiagnosticFailure("credentials_unreadable", "保存済みトークンを復号できませんでした。", "このWindowsユーザーでトークンを再入力して保存してください。別PCの資格情報ファイルは利用できません。", **details) from None
+        report["steps"][index].update(state="passed", message="保存済みトークンを読み込みました。値は表示しません。" if token_loader else "登録済みの資格情報を使用します。")
+        index = 2
         try:
-            gh = github_factory()
+            gh = github_factory(token) if token_loader is not None else github_factory()
+        except FileNotFoundError:
+            raise DiagnosticFailure("client_resource_missing", "HTTP通信の初期化に必要なファイルが見つかりません。", "exeと同じ版の_internalフォルダーをすべて展開してください。証明書の環境変数SSL_CERT_FILE・SSL_CERT_DIRを指定している場合は保存先も確認してください。トークンの復号失敗ではありません。") from None
         except UnicodeError:
             raise DiagnosticFailure("invalid_token", "保存したトークンの形式が不正です。", "余分な空白・改行を除き、トークンの値だけを入力して保存してください。") from None
         except ValueError:
             raise DiagnosticFailure("client_configuration", "GitHub通信用の設定を準備できませんでした。", "このPCのプロキシURLや証明書の環境設定を確認してください。トークンには値だけを入力してください。") from None
         except Exception:
-            raise DiagnosticFailure("credentials_unreadable", "保存済みトークンを復号できませんでした。", "このWindowsユーザーでトークンを再入力して保存してください。別PCの資格情報ファイルは利用できません。") from None
-        report["steps"][index].update(state="passed", message="トークンを読み込みました。値は表示しません。")
-        for index, path in ((2, "/user"), (3, f"/repos/{repo}"), (4, None)):
+            raise DiagnosticFailure("client_initialization", "HTTP通信の初期化に失敗しました。", "アプリの配布ファイル、プロキシ、証明書の設定を確認してください。") from None
+        report["steps"][index].update(state="passed", message="通信クライアントを準備しました。")
+        for index, path in ((3, "/user"), (4, f"/repos/{repo}"), (5, None)):
             stage = report["steps"][index]
-            if index == 4:
+            if index == 5:
                 path = f"/repos/{repo}/git/ref/heads/{quote(report['default_branch'], safe='')}"
             data, details = _get(gh, path, stage["id"])
-            if index == 2:
+            if index == 3:
                 if not re.fullmatch(r"[A-Za-z0-9-]{1,39}", str(data.get("login", ""))):
                     raise DiagnosticFailure("invalid_response", "GitHubのユーザー情報を取得できませんでした。", "接続先やプロキシの応答を確認してください。", **details)
                 report["login"] = data["login"]
                 message = "認証ユーザー: " + report["login"]
-            elif index == 3:
+            elif index == 4:
                 branch = data.get("default_branch")
                 if data.get("full_name", "").lower() != repo.lower():
                     raise DiagnosticFailure("invalid_response", "対象リポジトリの応答が一致しません。", "保存済みリポジトリ設定と通信先を確認してください。", **details)

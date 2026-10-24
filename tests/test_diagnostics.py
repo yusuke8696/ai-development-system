@@ -35,8 +35,9 @@ def diagnostic(handler=None, **options):
         client = GitHub(SECRET, transport=httpx.MockTransport(transport))
         clients.append(client)
         return client
-    result = diagnose_github(options.get("repo", "owner/repo"), options.get("factory", factory),
-                             options.get("configured", lambda: True))
+    factory_fn = options.get("factory", factory)
+    result = diagnose_github(options.get("repo", "owner/repo"), lambda token: factory_fn(),
+                             options.get("configured", lambda: True), options.get("loader", lambda: SECRET))
     assert SECRET not in json.dumps(result, ensure_ascii=False)
     assert all(client.client.is_closed for client in clients)
     return result, calls
@@ -46,7 +47,7 @@ def test_complete_read_only_diagnosis_and_secret_isolation():
     result, calls = diagnostic(repo="https://github.com/owner/repo.git")
     assert result["ok"] and result["repository"] == "owner/repo"
     assert result["login"] == "tester"
-    assert [s["state"] for s in result["steps"]] == ["passed"] * 5
+    assert [s["state"] for s in result["steps"]] == ["passed"] * 6
     assert [r.url.path for r in calls] == ["/user", "/repos/owner/repo", "/repos/owner/repo/git/ref/heads/main"]
 
 
@@ -67,7 +68,7 @@ def test_invalid_repository_is_not_echoed():
 def test_credentials_failure_is_sanitized(target):
     def fail():
         raise OSError("C:/private-path/" + SECRET)
-    options = {"configured": fail} if target == "configuration_read" else {"factory": fail}
+    options = {"configured": fail} if target == "configuration_read" else {"loader": fail}
     result, calls = diagnostic(**options)
     assert result["steps"][1]["code"] == "credentials_unreadable" and not calls
     assert "private-path" not in json.dumps(result)
@@ -77,7 +78,20 @@ def test_client_setup_error_does_not_claim_the_token_is_rejected():
     def failed_factory():
         raise ValueError("Unknown scheme for proxy URL: https://user:" + SECRET + "@proxy")
     result, _ = diagnostic(factory=failed_factory)
-    assert result["steps"][1]["code"] == "client_configuration"
+    assert result["steps"][1]["state"] == "passed"
+    assert result["steps"][2]["code"] == "client_configuration"
+
+
+@pytest.mark.parametrize("error,code", [(FileNotFoundError(SECRET), "client_resource_missing"),
+                                      (OSError(SECRET), "client_initialization")])
+def test_http_client_initialization_failure_is_never_reported_as_decryption(error, code):
+    def failed_factory():
+        raise error
+    result, calls = diagnostic(factory=failed_factory)
+    assert not calls
+    assert result["failed_stage"] == "client"
+    assert result["steps"][1]["state"] == "passed"
+    assert result["steps"][2]["code"] == code
 
 
 @pytest.mark.parametrize("status,path,headers,expected", [
@@ -122,20 +136,20 @@ def test_transport_failures_have_specific_safe_guidance(kind, expected):
         raise httpx.ConnectError(SECRET, request=request)
     result, calls = diagnostic(failure)
     assert result["failed_stage"] == "authentication"
-    assert result["steps"][2]["code"] == expected and len(calls) == 1
+    assert result["steps"][3]["code"] == expected and len(calls) == 1
 
 
 def test_invalid_json_response_and_token_like_request_id_not_exposed():
     result, _ = diagnostic(lambda request: httpx.Response(200, text=SECRET, headers={"x-github-request-id": SECRET}))
-    assert result["steps"][2]["code"] == "invalid_response"
-    assert "request_id" not in result["steps"][2]
+    assert result["steps"][3]["code"] == "invalid_response"
+    assert "request_id" not in result["steps"][3]
 
 
 def test_unexpected_exception_does_not_disclose_credentials():
     def failure(request):
         raise RuntimeError(SECRET)
     result, _ = diagnostic(failure)
-    assert result["steps"][2]["code"] == "unexpected"
+    assert result["steps"][3]["code"] == "unexpected"
 
 
 def test_api_returns_structured_diagnostics_with_csrf_auth(tmp_path):
