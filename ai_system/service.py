@@ -745,7 +745,7 @@ class Service(ProjectTemplatesMixin):
         digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
         if t.get("review_digest") == digest and t.get("pr") and t.get("issue"):
             return self.publish(t["id"])
-        report = "# 最終レビュー依頼\n\n以下の版の成果物と検証結果をレビューし、このPRで承認してください。\n\n" + json.dumps(manifest, ensure_ascii=False, indent=2)
+        report = "# 最終レビュー依頼\n\n以下の版の成果物と検証結果をレビューし、このPRで承認またはマージしてください。PR作者がリーダー本人の場合は、GitHubでマージして承認します。\n\n" + json.dumps(manifest, ensure_ascii=False, indent=2)
         aid = self.store.put("artifacts", {"project_id": p["id"], "task_id": t["id"], "title": t["title"],
             "body": report, "hash": digest, "errors": [], "files": [{"path": f".ai-dev/reviews/{t['id']}.md", "content": report}]})
         self.store.change("tasks", t["id"], artifacts=t["artifacts"] + [aid["id"]], review_digest=digest,
@@ -758,7 +758,7 @@ class Service(ProjectTemplatesMixin):
             gh.request("PATCH", f"/repos/{p['repo']}/issues/{issue['number']}", {
                 "body": "<!-- ai-task:" + t["id"] + " -->\n\nリーダー: @" + p.get("leader_login", "") +
                         "\n\nレビュー対象PR: " + pr["url"] + "\n対象SHA: " + pr["sha"] +
-                        "\n\n確認項目: 成果物・要件充足・テスト結果・残課題。GitHubのPRでApproveしてください。"})
+                        "\n\n確認項目: 成果物・要件充足・テスト結果・残課題。GitHubのPRでApproveまたはマージしてください。PR作者がリーダー本人の場合は、マージを承認として扱います。"})
             self.store.change("tasks", t["id"], issue={"number": issue["number"], "url": issue["html_url"]})
         finally:
             gh.close()
@@ -786,20 +786,22 @@ class Service(ProjectTemplatesMixin):
             if pr["head"]["sha"] != t["pr"]["sha"]:
                 raise Conflict("最終レビューPRの版が変わりました。対象を再公開してください。")
             valid, evidence = evaluate_reviews(pr, reviews, p.get("leader_id"))
-            if valid and not gh.checks_pass(p["repo"], pr["head"]["sha"]):
+            if valid and not pr.get("merged") and not gh.checks_pass(p["repo"], pr["head"]["sha"]):
                 valid, evidence = False, "CIが完了していないか失敗しています。"
             if valid and not pr.get("merged") and (pr.get("mergeable") is not True or
                     pr.get("mergeable_state") in {"blocked", "dirty", "unknown", "behind", "unstable"}):
                 valid, evidence = False, "GitHubのマージ条件・保護ルールが未成立、または判定待ちです。"
-            latest, _ = gh.pr_reviews(p["repo"], t["pr"]["number"])
+            latest, latest_reviews = gh.pr_reviews(p["repo"], t["pr"]["number"])
             if latest["head"]["sha"] != pr["head"]["sha"]:
                 valid, evidence = False, "確認中に対象版が変わりました。"
+            elif valid:
+                valid, evidence = evaluate_reviews(latest, latest_reviews, p.get("leader_id"))
             if self.approval_basis(self.store.get("tasks", task_id)) != basis_before:
                 valid, evidence = False, "確認中に対象タスクが変わりました。再確認してください。"
-            return self.observe_approval(t, "succeeded" if valid else "waiting_approval",
-                "承認を確認しました。" if valid else evidence,
-                {"review_id": evidence["id"], "reviewer_id": evidence["user"]["id"],
-                    "sha": evidence["commit_id"], "url": evidence["html_url"]} if valid else None)
+            reason = evidence
+            if valid:
+                reason = "GitHubでマージ済みであることを確認しました。" if evidence["kind"] == "merge" else "承認を確認しました。"
+            return self.observe_approval(t, "succeeded" if valid else "waiting_approval", reason, evidence if valid else None)
         except Exception:
             self.observe_approval(t, "waiting_approval", "GitHubで承認を確認できません。")
             raise

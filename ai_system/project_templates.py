@@ -69,7 +69,7 @@ class ProjectTemplatesMixin:
     def _verified_preparation(self, project):
         p = project.get("template_preparation", {})
         if not p.get("ready") or not p.get("commit"):
-            raise Conflict("開発準備で書式登録PRを作成し、リーダー承認・マージを確認してください。")
+            raise Conflict("開発準備で書式登録PRを作成し、GitHubでのマージを確認してください。")
         try:
             verified = self.store.get("template_verifications", self._verification_id(project, p["commit"]))
         except KeyError:
@@ -100,7 +100,7 @@ class ProjectTemplatesMixin:
         try:
             self._verified_preparation(project)
             preparation["ready"] = True
-            preparation["reason"] = "リーダー承認済みの固定版を使用します。"
+            preparation["reason"] = "GitHubでマージを確認した固定版を使用します。"
         except Conflict as exc:
             preparation["ready"] = False
             preparation["reason"] = str(exc)
@@ -152,7 +152,8 @@ class ProjectTemplatesMixin:
                     raise ValueError("人間のリーダーを指定してください。")
                 branch = f"ai-formats/{project_id}/{uuid.uuid4().hex[:12]}"
                 pr = gh.publish_files_pr(project, branch, files, "開発前の文書フォーマット登録: " + project["name"],
-                    "全員が使用するMarkdown書式を登録します。指定リーダーは内容をレビュー・承認してマージしてください。\n\nProject: " + project_id)
+                    "全員が使用するMarkdown書式を登録します。内容を確認してGitHubでマージしてください。"
+                    "PR作者とリーダーが同じ場合は、本人によるマージを承認として扱います。\n\nProject: " + project_id)
                 preparation = {"ready": False, "pr": pr, "lock_hash": digest(lock), "bindings": bindings,
                                "task_bindings": task_bindings, "templates": registered, "leader_id": leader["id"]}
                 self.store.change("projects", project_id, template_preparation=preparation)
@@ -176,7 +177,7 @@ class ProjectTemplatesMixin:
                 if not approved:
                     raise Conflict(str(evidence))
                 if not pr.get("merged"):
-                    raise Conflict("書式登録PRはリーダー承認後のマージ待ちです。")
+                    raise Conflict("書式登録PRはGitHubでのマージ待ちです。")
                 head, base = pr.get("head", {}), pr.get("base", {})
                 if head.get("sha") != preparation["pr"].get("sha") or base.get("ref") != project["base_branch"] or base.get("repo", {}).get("full_name", "").lower() != project["repo"].lower() or head.get("repo", {}).get("full_name", "").lower() != project["repo"].lower():
                     raise Conflict("書式登録PRの対象版または対象リポジトリが異なります。登録し直してください。")
@@ -214,11 +215,13 @@ class ProjectTemplatesMixin:
                         old = None
                     self.store.put("project_templates", record, old["version"] if old else None)
                 pinned = dict(preparation, **{k: lock[k] for k in ("bindings", "task_bindings", "templates")},
-                              ready=True, commit=commit, leader_id=leader["id"], review_id=evidence["id"])
+                              ready=True, commit=commit, leader_id=leader["id"],
+                              approval_kind=evidence["kind"], review_id=evidence.get("review_id"))
                 pinned.pop("confirmed_at", None)  # Confirmation time belongs to this PC's verification cache.
                 verification = {"id": self._verification_id(project, commit), "project_id": project_id,
                                 "repo": project["repo"], "commit": commit, "pin_hash": digest(self._pin(pinned)),
-                                "leader_login": leader["login"], "base_branch": project["base_branch"], "verified_at": now()}
+                                "leader_login": leader["login"], "base_branch": project["base_branch"],
+                                "approval_evidence": evidence, "verified_at": now()}
                 try:
                     prior = self.store.get("template_verifications", verification["id"])
                 except KeyError:

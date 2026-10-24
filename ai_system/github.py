@@ -370,7 +370,7 @@ class GitHub:
 
     def pr_reviews(self, repo, number):
         pr = self.request("GET", f"/repos/{repo}/pulls/{number}")
-        reviews = self.pages(f"/repos/{repo}/pulls/{number}/reviews")
+        reviews = [] if pr.get("merged") is True else self.pages(f"/repos/{repo}/pulls/{number}/reviews")
         return pr, reviews
 
     def checks_pass(self, repo, sha):

@@ -150,6 +150,31 @@ def test_change_request_and_dismissal(pr):
     assert evaluate_reviews(pr, [review("CHANGES_REQUESTED", uid=3), review("APPROVED", uid=3, rid=2), review(rid=3)], 2)[0]
 
 
+@pytest.mark.parametrize("author", [1, 2])
+@pytest.mark.parametrize("reviews", [[], [review("CHANGES_REQUESTED")], [review("DISMISSED")]])
+def test_merged_pr_is_accepted_without_review_including_leader_author(pr, author, reviews):
+    pr.update(user={"id": author}, state="closed", merged=True, merge_commit_sha="a" * 40,
+              merged_by={"id": author}, merged_at="2026-10-24T01:00:00Z",
+              html_url="https://github.com/example/repo/pull/1")
+    valid, proof = evaluate_reviews(pr, reviews, 2)
+    assert valid and proof["kind"] == "merge"
+    assert proof["merger_id"] == author and proof["merge_commit_sha"] == "a" * 40
+    assert "review_id" not in proof  # A merge is never fabricated as an APPROVED review.
+
+
+@pytest.mark.parametrize("commit", [None, "", "head"])
+def test_missing_merge_commit_cannot_be_accepted(pr, commit):
+    pr.update(merged=True, merge_commit_sha=commit)
+    assert not evaluate_reviews(pr, [], 2)[0]
+
+
+def test_closed_unmerged_pr_and_unspecified_leader_are_not_accepted(pr):
+    pr.update(state="closed", merged=False)
+    assert not evaluate_reviews(pr, [review()], 2)[0]
+    pr.update(merged=True, merge_commit_sha="a" * 40)
+    assert not evaluate_reviews(pr, [], None)[0]
+
+
 def test_llm_json_parser():
     assert clean_json('<think>reason</think>```json\n{"questions": []}\n```') == {"questions": []}
     with pytest.raises(ValueError):
