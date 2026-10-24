@@ -122,8 +122,9 @@ class Service(ProjectTemplatesMixin):
 
     def github_diagnostics(self):
         from .diagnostics import diagnose_github
-        return diagnose_github(self.store.get("settings", "local")["repo"], self.github,
-                               lambda: self.secrets.configured("github"))
+        return diagnose_github(self.store.get("settings", "local")["repo"],
+                               lambda token: self.github_factory() if self.github_factory else GitHub(token),
+                               lambda: self.secrets.configured("github"), lambda: self.secrets.get("github"))
 
     def llm(self, role):
         profiles = self.store.list("models")

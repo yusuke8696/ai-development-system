@@ -17,6 +17,7 @@ v0.2.1以降は、短時間で消える通知に加えて、接続テストの�
 |---|---|
 | 保存済みリポジトリ設定 | owner/repoまたはGitHub URLの指定形式 |
 | 保存済みトークンの読み込み | 登録の有無、このWindowsユーザーによる復号 |
+| 通信クライアントの初期化 | 配布ファイル、HTTPS、プロキシの通信準備 |
 | GitHub認証 | 保存したトークンで認証できるか |
 | リポジトリの参照 | 設定したリポジトリを参照できるか |
 | 既定ブランチの参照 | 既定ブランチに参照可能なコミットがあるか |
@@ -37,9 +38,14 @@ v0.2.1以降は、短時間で消える通知に加えて、接続テストの�
 | tls_certificate | PCの日時と、社内プロキシ・セキュリティソフトの証明書設定を確認。証明書検証は無効化しない |
 | proxy、dns、network、timeout | プロキシ、DNS、回線、api.github.comへのHTTPS通信を確認 |
 | client_configuration | プロキシURL等の通信初期化に使う設定を確認。GitHubがトークンを拒否した結果ではない |
+| client_resource_missing、client_initialization | exeと_internalを含む新版一式へ更新。トークン復号とは別の通信準備エラー |
 | app_connection | exeから画面を開き直す。診断未対応の旧版は新版へ更新 |
 
 HTTPステータスと、取得できた場合はGitHubのRequest IDも表示します。エラーの生の本文、トークン、Authorizationヘッダー、プロキシの資格情報は表示しません。JSONにはユーザー名やリポジトリ名が入るため、共有先は確認してください。
+
+v0.2.1の配布exeにはHTTPS初期化の補助ファイルが不足する不具合があり、その通信準備エラーを「復号できませんでした」と誤表示していた。v0.2.2で同梱を修正し、トークン読み込みと通信初期化を別の段階に分けた。v0.2.1でこの表示が出た場合は、資格情報ファイルを削除する前に新版へ更新する。
+
+Fine-grained tokenのRepository permissionsはContents・Issues・Pull requestsをRead and write、Checks・Commit statusesをRead-onlyにする。Administrationは不要。User permissionsがない表示自体は問題ではない。権限変更の詳細は[GitHub公式の権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)を参照。
 
 診断はGETだけを使い、リポジトリを変更しません。成功は読み取り接続の確認です。PR作成等の書き込み権限や、組織・ブランチの保護ルールをすべて検証した結果ではありません。
 
@@ -52,6 +58,8 @@ HTTPステータスと、取得できた場合はGitHubのRequest IDも表示し
 ## 診断画面の例
 
 以下は、認証・リポジトリ参照が成功し、空のリポジトリのブランチ参照がHTTP 409になる模擬APIを使った画面試験です。
+
+画像はv0.2.1時点の表示例です。v0.2.2以降は通信クライアントの初期化を別の行で表示します。
 
 ![GitHub接続診断](images/github-diagnostic.png)
 

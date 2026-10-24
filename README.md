@@ -29,7 +29,7 @@ llama-server -hf empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M --host 127.0.0.1 --port 808
 
 ## GitHub設定と共同作業
 
-接続テストが失敗した場合は、「接続・環境設定」の下部にある「GitHub接続診断」を確認してください。保存済み設定・トークン読込・GitHub認証・リポジトリ参照・既定ブランチ参照の結果と、HTTPステータス、対処方法を表示します。「診断結果のJSONを表示」から共有用の結果も確認できます。トークンや通信ヘッダーは含めません。詳しくは[接続診断ガイド](docs/github-connection-diagnostics.md)を参照してください。
+接続テストが失敗した場合は、「接続・環境設定」の下部にある「GitHub接続診断」を確認してください。保存済み設定・トークン読込・通信初期化・GitHub認証・リポジトリ参照・既定ブランチ参照の結果と、HTTPステータス、対処方法を表示します。「診断結果のJSONを表示」から共有用の結果も確認できます。トークンや通信ヘッダーは含めません。v0.2.1の配布不具合による「復号できない」表示はv0.2.2で修正しました。詳しくは[接続診断ガイド](docs/github-connection-diagnostics.md)を参照してください。
 
 初期版はGitHub.comに対応します。Fine-grained PATは対象リポジトリに限定し、Contents・Issues・Pull requestsのRead/Write、Checks・Commit statusesのReadを設定します。組織側の承認・SSOが必要な場合はその設定にも従ってください。トークンをURLや文書へ記載しないでください。
 
