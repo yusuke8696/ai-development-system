@@ -45,7 +45,9 @@ HTTPステータスと、取得できた場合はGitHubのRequest IDも表示し
 
 v0.2.1の配布exeにはHTTPS初期化の補助ファイルが不足する不具合があり、その通信準備エラーを「復号できませんでした」と誤表示していた。v0.2.2で同梱を修正し、トークン読み込みと通信初期化を別の段階に分けた。v0.2.1でこの表示が出た場合は、資格情報ファイルを削除する前に新版へ更新する。
 
-Fine-grained tokenのRepository permissionsはContents・Issues・Pull requestsをRead and write、Checks・Commit statusesをRead-onlyにする。Administrationは不要。User permissionsがない表示自体は問題ではない。権限変更の詳細は[GitHub公式の権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)を参照。
+Fine-grained tokenのRepository permissionsはContents・Issues・Pull requests・WorkflowsをRead and write、Checks・Commit statusesをRead-onlyにする。WorkflowsはOSS検査のworkflow登録に必要。Administrationは不要。User permissionsがない表示自体は問題ではない。権限変更の詳細は[GitHub公式の権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)を参照。
+
+v0.3.0では、通常のHTTP 403権限拒否をAPI制限として一律待機にする誤表示も修正した。実際の利用制限では待機秒数と、次回操作時に再試行できる時刻を表示する。接続テストが成功していても書き込み権限の確認は別途必要。
 
 診断はGETだけを使い、リポジトリを変更しません。成功は読み取り接続の確認です。PR作成等の書き込み権限や、組織・ブランチの保護ルールをすべて検証した結果ではありません。
 

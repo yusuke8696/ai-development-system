@@ -13,6 +13,7 @@ from .store import Conflict
 from .templates import validate_template, validate_document, MD
 from .tools import mcp_http, read_file, search_files
 from .workflow import WORKFLOWS
+from .license_policy import SKILL_ID
 
 
 def create_app(root, bootstrap=None, service=None, polling=True):
@@ -177,6 +178,10 @@ def create_app(root, bootstrap=None, service=None, polling=True):
         return service.store.put("projects", dict(old, leader_login=body.get("leader_login", old.get("leader_login", "")),
                                                  leader_id=None), body.get("expected_version"))
 
+    @app.post("/api/projects/{pid}/licenses")
+    def license_policy(pid, body: dict):
+        return service.set_license_policy(pid, body)
+
     @app.get("/api/projects/{pid}/preparation")
     def preparation(pid):
         return service.template_preparation(pid)
@@ -266,6 +271,8 @@ def create_app(root, bootstrap=None, service=None, polling=True):
     @app.post("/api/skills")
     def skills(body: dict):
         import hashlib
+        if body.get("id") == SKILL_ID:
+            raise ValueError("OSSライセンスskillは必須です。許可リストはOSSライセンス画面で設定してください。")
         expected = body.pop("expected_version", None)
         if not body.get("name") or not isinstance(body.get("body"), str) or len(body["body"]) > 100000:
             raise ValueError("skill名と本文を指定してください（100KB以内）。")

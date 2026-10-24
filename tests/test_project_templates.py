@@ -100,7 +100,8 @@ def test_registration_contains_only_selected_project_formats(workspace):
     result = service.prepare_templates(project["id"], default_bindings(service, project))
     assert not result["ready"] and result["pr"]["number"] == 1
     assert len(result["required"]) == 5
-    assert all(path.startswith((".ai-dev/templates/" + project["id"], ".ai-dev/template-locks/")) for path in gh.files)
+    assert all(path.startswith((".ai-dev/templates/" + project["id"], ".ai-dev/template-locks/",
+                               ".ai-dev/oss/" + project["id"], ".github/workflows/aiworkspace-oss-" + project["id"])) for path in gh.files)
     assert not any("backlog" in path or "owner.json" in path for path in gh.files)
     assert service.store.list("templates") == before
     assert not service.store.list("project_templates")

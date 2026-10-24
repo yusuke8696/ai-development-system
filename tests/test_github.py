@@ -390,3 +390,37 @@ def test_pr_confirmation_only_fetches_reviews_for_unmerged_prs(merged):
         assert len(paths) == (1 if merged else 2)
     finally:
         gh.close()
+
+
+def test_missing_workflow_permission_is_not_treated_as_a_rate_limit():
+    calls = []
+    def server(req):
+        calls.append(req)
+        return httpx.Response(403, json={"message": "Resource not accessible by personal access token"})
+    gh = GitHub("workflow-permission-test", transport=httpx.MockTransport(server))
+    try:
+        for _ in range(2):
+            with pytest.raises(ValueError, match="Workflows"):
+                gh.request("POST", "/repos/o/r/git/commits", {})
+        assert len(calls) == 2 and gh.identity not in GitHub._cooldown
+    finally:
+        gh.close()
+
+
+@pytest.mark.parametrize("status,headers,body", [(429, {"retry-after": "90"}, {}),
+    (403, {"x-ratelimit-remaining": "0"}, {}), (403, {}, {"message": "You have exceeded a secondary rate limit"})])
+def test_actual_rate_limits_wait_and_display_when_to_retry(status, headers, body):
+    calls = []
+    def server(req):
+        calls.append(req)
+        return httpx.Response(status, headers=headers, json=body)
+    gh = GitHub("rate-limit-test-" + str(status) + str(headers), transport=httpx.MockTransport(server))
+    try:
+        with pytest.raises(ValueError, match="利用制限"):
+            gh.request("GET", "/repos/o/r")
+        with pytest.raises(ValueError, match="秒後.*再実行"):
+            gh.request("GET", "/repos/o/r")
+        assert len(calls) == 1
+    finally:
+        GitHub._cooldown.pop(gh.identity, None)
+        gh.close()

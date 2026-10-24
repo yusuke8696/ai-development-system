@@ -7,6 +7,7 @@ import uuid
 from .store import Conflict, now
 from .templates import template_id, validate_template
 from .workflow import evaluate_reviews
+from .license_policy import policy_hash, enforcement_files, enforcement_hashes
 
 
 def canonical(value):
@@ -64,12 +65,14 @@ class ProjectTemplatesMixin:
 
     @staticmethod
     def _pin(preparation):
-        return {k: preparation.get(k) for k in ("pr", "commit", "lock_hash", "bindings", "task_bindings", "templates", "leader_id")}
+        return {k: preparation.get(k) for k in ("pr", "commit", "lock_hash", "bindings", "task_bindings", "templates", "leader_id", "license_policy_hash", "license_files")}
 
     def _verified_preparation(self, project):
         p = project.get("template_preparation", {})
         if not p.get("ready") or not p.get("commit"):
             raise Conflict("開発準備で書式登録PRを作成し、GitHubでのマージを確認してください。")
+        if p.get("license_policy_hash") != policy_hash(project.get("license_policy")):
+            raise Conflict("OSSライセンス設定を含む登録PRを作成し、マージを確認してください。")
         try:
             verified = self.store.get("template_verifications", self._verification_id(project, p["commit"]))
         except KeyError:
@@ -142,8 +145,12 @@ class ProjectTemplatesMixin:
                 files[folder + "/manifest.json"] = canonical(manifest) + "\n"
                 registered[source] = {"path": folder, "hash": content_hash}
                 task_bindings.update({s: source for s in row["source_ids"]})
+            license_files = enforcement_files(project)
+            files.update(license_files)
+            license_hash = policy_hash(project.get("license_policy"))
             lock = {"schema_version": 1, "repo": project["repo"], "project_id": project_id,
-                    "bindings": bindings, "task_bindings": task_bindings, "templates": registered}
+                    "bindings": bindings, "task_bindings": task_bindings, "templates": registered,
+                    "license_policy_hash": license_hash, "license_files": enforcement_hashes(license_files)}
             files[f".ai-dev/template-locks/{project_id}.json"] = canonical(lock) + "\n"
             gh = self.github()
             try:
@@ -152,10 +159,11 @@ class ProjectTemplatesMixin:
                     raise ValueError("人間のリーダーを指定してください。")
                 branch = f"ai-formats/{project_id}/{uuid.uuid4().hex[:12]}"
                 pr = gh.publish_files_pr(project, branch, files, "開発前の文書フォーマット登録: " + project["name"],
-                    "全員が使用するMarkdown書式を登録します。内容を確認してGitHubでマージしてください。"
+                    "全員が使用するMarkdown書式とOSSライセンス許可リスト、skill、osv-scanner用スクリプト、GitHub Actionsを登録します。内容を確認してGitHubでマージしてください。"
                     "PR作者とリーダーが同じ場合は、本人によるマージを承認として扱います。\n\nProject: " + project_id)
                 preparation = {"ready": False, "pr": pr, "lock_hash": digest(lock), "bindings": bindings,
-                               "task_bindings": task_bindings, "templates": registered, "leader_id": leader["id"]}
+                               "task_bindings": task_bindings, "templates": registered, "leader_id": leader["id"],
+                               "license_policy_hash": license_hash, "license_files": lock["license_files"]}
                 self.store.change("projects", project_id, template_preparation=preparation)
             finally:
                 gh.close()
@@ -188,6 +196,15 @@ class ProjectTemplatesMixin:
                 lock = json.loads(raw)
                 if lock.get("schema_version") != 1 or lock.get("project_id") != project_id or lock.get("repo") != project["repo"] or digest(lock) != preparation.get("lock_hash"):
                     raise Conflict("マージされた書式設定が登録PRの内容と一致しません。")
+                if lock.get("license_policy_hash") != policy_hash(project.get("license_policy")):
+                    raise Conflict("OSSライセンス設定が変更されています。登録PRを作成し直してください。")
+                expected_files = enforcement_files(project)
+                if lock.get("license_files") != enforcement_hashes(expected_files):
+                    raise Conflict("ライセンス検査ファイルの構成が異なります。登録PRを作成し直してください。")
+                for path, expected_hash in lock["license_files"].items():
+                    content, _ = gh.content(project["repo"], path, commit)
+                    if hashlib.sha256(content.encode()).hexdigest() != expected_hash:
+                        raise Conflict("マージされたライセンス設定・skill・検査スクリプト・workflowのハッシュが一致しません。")
                 cached = []
                 for source, meta in lock["templates"].items():
                     template_id(source)
@@ -214,7 +231,7 @@ class ProjectTemplatesMixin:
                     except KeyError:
                         old = None
                     self.store.put("project_templates", record, old["version"] if old else None)
-                pinned = dict(preparation, **{k: lock[k] for k in ("bindings", "task_bindings", "templates")},
+                pinned = dict(preparation, **{k: lock[k] for k in ("bindings", "task_bindings", "templates", "license_policy_hash", "license_files")},
                               ready=True, commit=commit, leader_id=leader["id"],
                               approval_kind=evidence["kind"], review_id=evidence.get("review_id"))
                 pinned.pop("confirmed_at", None)  # Confirmation time belongs to this PC's verification cache.

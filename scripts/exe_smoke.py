@@ -85,6 +85,15 @@ try:
         project_id = response.json()["id"]
         state = client.get(base + "/api/state").json()
         project = next(p for p in state["projects"] if p["id"] == project_id)
+        license_policy = project["license_policy"]
+        assert any(row["id"] == "MIT" and row["enabled"] for row in license_policy["licenses"])
+        license_policy["licenses"].append({"id": "BlueOak-1.0.0", "name": "exe custom license", "enabled": False})
+        changed = client.post(base + f"/api/projects/{project_id}/licenses", json={
+            "expected_version": project["version"], "license_policy": license_policy})
+        assert changed.status_code == 200
+        assert changed.json()["license_policy"]["licenses"][-1]["enabled"] is False
+        assert any(skill["id"] == "oss-license-policy" and skill["required"] for skill in state["skills"])
+        report["license_policy"] = "passed"
         assert not project["template_preparation"]["ready"]
         assert client.post(base + "/api/tasks/" + project["tasks"][0]["id"] + "/start", json={}).status_code == 409
         assert "開発準備・書式登録" in page.text
@@ -110,6 +119,9 @@ try:
         base = "http://127.0.0.1:" + str(info["port"])
         state = client.get(base + "/api/state").json()
         assert any(p["id"] == project_id for p in state["projects"])
+        restored_policy = next(p for p in state["projects"] if p["id"] == project_id)["license_policy"]
+        assert next(row for row in restored_policy["licenses"] if row["id"] == "BlueOak-1.0.0")["enabled"] is False
+        report["license_restart_persistence"] = "passed"
         client.headers["x-csrf-token"] = state["csrf"]
         diagnosis = client.post(base + "/api/github/test", json={}).json()
         assert diagnosis["steps"][1]["state"] == "passed"

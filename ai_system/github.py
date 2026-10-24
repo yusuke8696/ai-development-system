@@ -5,6 +5,8 @@ import re
 import time
 import hashlib
 import threading
+import math
+from datetime import datetime
 from urllib.parse import quote
 import httpx
 from .store import Conflict
@@ -34,14 +36,25 @@ class GitHub:
     def request(self, method, path, body=None):
         key = (self.identity, path)
         with self._request_lock:
-            if self._cooldown.get(self.identity, 0) > time.time():
-                raise ValueError("GitHub APIの待機時間中です。後で同期してください。")
+            until = self._cooldown.get(self.identity, 0)
+            if until > time.time():
+                remaining = math.ceil(until - time.time())
+                retry_at = datetime.fromtimestamp(until).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+                raise ValueError(f"GitHub APIの利用制限で待機中です。{remaining}秒後（{retry_at}）に再実行してください。")
             cached = self._cache.get(key) if method == "GET" else None
             headers = {"If-None-Match": cached[0]} if cached else {}
             response = self.client.request(method, path, json=body, headers=headers)
             if response.status_code == 304 and cached:
                 return cached[1]
-            if response.status_code in (403, 429):
+            limited = response.status_code == 429 or (response.status_code == 403 and
+                (response.headers.get("x-ratelimit-remaining") == "0" or response.headers.get("retry-after")))
+            if response.status_code == 403 and not limited:
+                try:
+                    message = str(response.json().get("message", "")).lower()
+                    limited = "secondary rate limit" in message or "abuse detection" in message
+                except (ValueError, AttributeError):
+                    pass
+            if limited:
                 delay = 60
                 try:
                     delay = max(delay, int(response.headers.get("retry-after", 0)),
@@ -58,8 +71,10 @@ class GitHub:
                 self._cache.clear()
         if response.status_code in (409, 422):
             raise Conflict("GitHubで競合または入力エラー。状態を再取得してください。")
-        if response.status_code in (403, 429):
-            raise ValueError("GitHub権限またはAPI制限を確認してください。次回取得は待機します。")
+        if limited:
+            raise ValueError(f"GitHub APIの利用制限に達しました。少なくとも{delay}秒待って再実行してください。")
+        if response.status_code == 403:
+            raise ValueError("GitHubが操作を拒否しました（HTTP 403）。トークンの対象リポジトリ・権限・組織の承認を確認してください。書式・OSS設定の登録にはContents・Pull requests・Workflowsの書き込み権限が必要です。")
         if response.status_code == 401:
             raise ValueError("GitHubの認証を設定してください。")
         if response.status_code == 404:
