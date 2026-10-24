@@ -10,8 +10,10 @@ from build_runtime import ssl_support_data
 root = Path(__file__).resolve().parents[1]
 os.environ["PYINSTALLER_CONFIG_DIR"] = str(root / ".runtime/pyinstaller-cache")
 command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--windowed", "--name", "AIWorkspace",
-    "--add-data", "ai_system/web;ai_system/web", "--add-data", "ai_system/bundled;ai_system/bundled",
-    "--collect-all", "uvicorn"]
+    "--add-data", "ai_system/web;ai_system/web", "--collect-all", "uvicorn"]
+for source in sorted((root / "ai_system/bundled").rglob("*")):
+    if source.is_file() and "__pycache__" not in source.parts and source.suffix not in {".pyc", ".pyo"}:
+        command.extend(["--add-data", str(source) + ";" + source.parent.relative_to(root).as_posix()])
 for source, destination in ssl_support_data():
     command.extend(["--add-data", source + ";" + destination])
 subprocess.run(command + ["launcher.py"], cwd=root, check=True)
