@@ -371,3 +371,22 @@ def test_paginated_reviews():
         return httpx.Response(200, json=[{"id": i} for i in range(100)] if page == "1" else [{"id": 101}])
     gh = GitHub(transport=httpx.MockTransport(server))
     assert len(gh.pages("/repos/o/r/pulls/1/reviews")) == 101
+
+
+@pytest.mark.parametrize("merged", [False, True])
+def test_pr_confirmation_only_fetches_reviews_for_unmerged_prs(merged):
+    paths = []
+    def server(req):
+        paths.append(req.url.path)
+        if req.url.path.endswith("/reviews"):
+            assert not merged, "A merged PR must not depend on a separate reviews request."
+            return httpx.Response(200, json=[{"id": 1}])
+        return httpx.Response(200, json={"number": 1, "merged": merged})
+    gh = GitHub(transport=httpx.MockTransport(server))
+    try:
+        pr, reviews = gh.pr_reviews("o/r", 1)
+        assert pr["merged"] == merged
+        assert reviews == ([] if merged else [{"id": 1}])
+        assert len(paths) == (1 if merged else 2)
+    finally:
+        gh.close()

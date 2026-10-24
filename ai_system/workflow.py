@@ -1,3 +1,4 @@
+import re
 import uuid
 
 WORKFLOWS = {
@@ -38,8 +39,17 @@ def evaluate_reviews(pr, reviews, leader_id):
     """No UI operation can manufacture this result; caller supplies fresh GitHub data."""
     if not leader_id:
         return False, "リーダー未指定"
+    if pr.get("merged") is True:
+        commit = pr.get("merge_commit_sha", "")
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            return False, "マージ済み固定コミットを取得できません。"
+        return True, {"kind": "merge", "sha": pr["head"]["sha"], "merge_commit_sha": commit,
+                      "merger_id": (pr.get("merged_by") or {}).get("id"),
+                      "merged_at": pr.get("merged_at"), "url": pr.get("html_url", "")}
+    if pr.get("state") == "closed":
+        return False, "PRは未マージのまま閉じられています。"
     if pr.get("user", {}).get("id") == leader_id:
-        return False, "PR作者と別のリーダーが必要です。"
+        return False, "PR作者がリーダーです。GitHubで内容を確認してマージしてください。"
     latest = {}
     for review in sorted(reviews, key=lambda r: (r.get("submitted_at") or "", r["id"])):
         state = review.get("state")
@@ -53,6 +63,5 @@ def evaluate_reviews(pr, reviews, leader_id):
         return False, "指定リーダーの有効な承認待ち"
     if leader.get("commit_id") != pr["head"]["sha"]:
         return False, "対象版が変わりました。再承認が必要です。"
-    if pr.get("state") == "closed" and not pr.get("merged"):
-        return False, "PRは未マージのまま閉じられています。"
-    return True, leader
+    return True, {"kind": "review", "review_id": leader["id"], "reviewer_id": leader["user"]["id"],
+                  "sha": leader["commit_id"], "url": leader.get("html_url", "")}
